@@ -1,0 +1,3 @@
+NIFTY_50 = [
+    "RELIANCE.NS", "TCS.NS", "INFY.NS"
+]
