@@ -1,4 +1,5 @@
 import pandas as pd
+import logging
 from config import NIFTY_50
 from data_fetcher import fetch_ohlcv, fetch_option_chain
 from features import compute_features
@@ -14,21 +15,54 @@ def run_pipeline():
     results = []
 
     for ticker in NIFTY_50:
-        df = fetch_ohlcv(ticker)
-        df = compute_features(df)
+        try:
+            df = fetch_ohlcv(ticker)
+            
+            # ✅ FIX: Check if data is available
+            if df is None or len(df) < 30:
+                logging.warning(f"Insufficient data for {ticker}, skipping...")
+                continue
+            
+            df = compute_features(df)
+            
+            # ✅ FIX: Check if DataFrame is empty after feature computation
+            if df.empty or len(df) == 0:
+                logging.warning(f"No valid features for {ticker} after processing, skipping...")
+                continue
+            
+            # RL Training loop
+            for i in range(max(0, len(df) - 5)):
+                try:
+                    state = agent.get_state(df.iloc[i])
+                    action = agent.choose_action(state)
+                    
+                    if i + 5 < len(df):
+                        reward = (df['Close'].iloc[i+5] - df['Close'].iloc[i]) / df['Close'].iloc[i]
+                        agent.update(state, action, reward)
+                except Exception as e:
+                    logging.warning(f"Error in training loop for {ticker}: {e}")
+                    continue
+            
+            # Fetch options and generate signal
+            calls, puts, expiries = fetch_option_chain(ticker)
+            
+            # ✅ FIX: Safe signal generation with error handling
+            result = engine.generate_signal(df, agent, calls, puts, ticker)
+            
+            results.append(result)
+            simulator.log_trade(result)
+            
+        except Exception as e:
+            logging.error(f"Error processing {ticker}: {e}")
+            continue
 
-        for i in range(len(df) - 5):
-            state = agent.get_state(df.iloc[i])
-            action = agent.choose_action(state)
-
-            reward = (df['Close'].iloc[i+5] - df['Close'].iloc[i]) / df['Close'].iloc[i]
-            agent.update(state, action, reward)
-
-        calls, puts, expiries = fetch_option_chain(ticker)
-
-        result = engine.generate_signal(df, agent, calls, puts, ticker)
-
-        results.append(result)
-        simulator.log_trade(result)
-
+    # ✅ FIX: Handle case where no results are available
+    if not results:
+        results = [{
+            "Ticker": "N/A",
+            "Signal": "NO DATA",
+            "Confidence": 0.0,
+            "Spot": 0.0
+        }]
+    
     return pd.DataFrame(results), simulator.get_results()
