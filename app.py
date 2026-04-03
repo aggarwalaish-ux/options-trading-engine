@@ -25,7 +25,7 @@ with st.sidebar.expander("🔍 View Raw Data", expanded=False):
     with col1:
         selected_ticker = st.selectbox(
             "Select a ticker:",
-            NIFTY_50[:5]  # Show first 5 tickers for quick access
+             NIFTY_50  # ✅ FIX: Show ALL 50 NIFTY tickers
         )
     
     with col2:
