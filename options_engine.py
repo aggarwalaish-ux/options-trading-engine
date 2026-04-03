@@ -1,35 +1,27 @@
-import numpy as np
+import pandas as pd
 
-class OptionsStrategyEngine:
+class TradingEngine:
+    def __init__(self, data):
+        self.data = data
 
-    def generate_signal(self, df, agent, calls, puts, ticker):
-        latest = df.iloc[-1]
-        state = agent.get_state(latest)
+    def validate_data(self):
+        if not isinstance(self.data, pd.DataFrame):
+            raise ValueError("Data is not a DataFrame")
+        if self.data.empty:
+            raise ValueError("DataFrame is empty")
 
-        q = agent.q_table.get(state, np.zeros(3))
-        probs = q / (np.sum(np.abs(q)) + 1e-6)
+    def generate_signal(self):
+        if self.data is None or self.data.empty:
+            return 'NO DATA'
+        try:
+            self.validate_data()
+            signal = self.data.iloc[-1]['signal']  # Replace with your actual logic
+            return signal
+        except Exception as e:
+            print(f'Error in generating signal: {e}')
+            return 'ERROR'
 
-        spot = latest['Close']
-
-        if probs[0] > 0.5:
-            return {
-                "Ticker": ticker,
-                "Signal": "BUY CALL",
-                "Confidence": round(probs[0], 2),
-                "Spot": spot
-            }
-
-        elif probs[1] > 0.5:
-            return {
-                "Ticker": ticker,
-                "Signal": "BUY PUT",
-                "Confidence": round(probs[1], 2),
-                "Spot": spot
-            }
-
-        return {
-            "Ticker": ticker,
-            "Signal": "NO TRADE",
-            "Confidence": round(probs[2], 2),
-            "Spot": spot
-        }
+# Example usage:
+# data = pd.DataFrame(...)  # Your DataFrame initialization
+# engine = TradingEngine(data)
+# signal = engine.generate_signal()
