@@ -1,106 +1,121 @@
 import yfinance as yf
 import pandas as pd
-import requests
 import logging
 from config import DATA_PERIOD, DATA_INTERVAL
 
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 def fetch_ohlcv(ticker):
     """Fetch OHLCV data for a given ticker from Yahoo Finance"""
-    df = yf.download(ticker, period=DATA_PERIOD, interval=DATA_INTERVAL)
+    try:
+        logger.info(f"📥 Fetching OHLCV data for {ticker} (period={DATA_PERIOD})")
+        df = yf.download(ticker, period=DATA_PERIOD, interval=DATA_INTERVAL, progress=False)
 
-    # 🔴 IMPORTANT FIX: Handle multi-level columns
-    if isinstance(df.columns, type(df.columns)):
-        df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+        # Handle multi-level columns
+        if isinstance(df.columns, type(df.columns)):
+            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
 
-    df.dropna(inplace=True)
-    return df
+        df.dropna(inplace=True)
+        logger.info(f"✅ Successfully fetched {len(df)} rows for {ticker}")
+        return df
+    except Exception as e:
+        logger.error(f"❌ Error fetching OHLCV for {ticker}: {e}")
+        return pd.DataFrame()
 
 def fetch_option_chain(ticker):
-    """Fetch option chain data from NSE India API with improved error handling"""
+    """
+    Fetch option chain data from NSE using NSEPython library
+    This is the most reliable method for NSE data in 2025
+    """
     try:
-        # Convert ticker format from .NS to NSE symbol
+        # Convert ticker format from .NS to NSE symbol (remove .NS suffix)
         symbol = ticker.replace(".NS", "")
+        logger.info(f"🔍 Fetching options for {ticker} (symbol: {symbol})")
         
-        # ✅ FIX: NSE API endpoint
-        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-        
-        # ✅ FIX: Enhanced headers for better API compatibility
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Referer': 'https://www.nseindia.com/',
-            'Accept': 'application/json',
-            'Accept-Language': 'en-US,en;q=0.9'
-        }
-        
-        # ✅ FIX: Create session for better connection handling
-        session = requests.Session()
-        
-        # Initialize session with NSE website
+        # Try using NSEPython
         try:
-            session.get('https://www.nseindia.com/', headers=headers, timeout=5)
-        except:
-            pass  # Continue even if initialization fails
-        
-        # Fetch options data
-        response = session.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        calls = {}
-        puts = {}
-        expiries = []
-        
-        # ✅ FIX: Improved JSON parsing with flexible field names
-        if 'records' in data and 'data' in data['records']:
-            for option in data['records']['data']:
-                expiry = option.get('expiryDate', '')
-                strike = option.get('strikePrice', 0)
+            from nsepython import nse_optionchain_scrapper
+            logger.debug(f"📚 Using NSEPython library")
+            
+            logger.debug(f"⏳ Calling nse_optionchain_scrapper({symbol})...")
+            data = nse_optionchain_scrapper(symbol)
+            
+            logger.debug(f"✅ NSEPython returned data type: {type(data)}")
+            
+            calls = {}
+            puts = {}
+            expiries = []
+            
+            # Parse NSEPython response
+            if isinstance(data, dict):
+                logger.debug(f"🔑 Top-level keys: {list(data.keys())}")
                 
-                if expiry and expiry not in expiries:
-                    expiries.append(expiry)
+                # Get expiry dates
+                if 'expiryDates' in data:
+                    expiries = data['expiryDates']
+                    logger.info(f"📅 Available expiry dates: {expiries}")
                 
-                # Process call options - try multiple field name variations
-                if 'CE' in option and option['CE']:
-                    ce_data = option['CE']
-                    calls[str(strike)] = {
-                        'bid': float(ce_data.get('bidprice') or ce_data.get('bid') or 0),
-                        'ask': float(ce_data.get('askPrice') or ce_data.get('ask') or 0),
-                        'oi': float(ce_data.get('openInterest') or ce_data.get('oi') or 0),
-                        'volume': float(ce_data.get('totalTradedVolume') or ce_data.get('volume') or 0),
-                        'iv': float(ce_data.get('impliedVolatility') or ce_data.get('iv') or 0)
-                    }
+                # Parse records
+                if 'records' in data and 'data' in data['records']:
+                    records = data['records']['data']
+                    logger.debug(f"📊 Total records: {len(records)}")
+                    
+                    for idx, record in enumerate(records):
+                        strike = record.get('strikePrice', 0)
+                        
+                        # Parse Call data
+                        if 'CE' in record and record['CE']:
+                            ce = record['CE']
+                            try:
+                                calls[str(strike)] = {
+                                    'bid': float(ce.get('bidprice', 0)),
+                                    'ask': float(ce.get('askPrice', 0)),
+                                    'oi': float(ce.get('openInterest', 0)),
+                                    'volume': float(ce.get('totalTradedVolume', 0)),
+                                    'iv': float(ce.get('impliedVolatility', 0)),
+                                    'ltp': float(ce.get('lastPrice', 0))
+                                }
+                                if idx < 2:
+                                    logger.debug(f"  ✅ CE Strike {strike}: {calls[str(strike)]}")
+                            except Exception as e:
+                                logger.warning(f"  ⚠️ Error parsing CE at strike {strike}: {e}")
+                        
+                        # Parse Put data
+                        if 'PE' in record and record['PE']:
+                            pe = record['PE']
+                            try:
+                                puts[str(strike)] = {
+                                    'bid': float(pe.get('bidprice', 0)),
+                                    'ask': float(pe.get('askPrice', 0)),
+                                    'oi': float(pe.get('openInterest', 0)),
+                                    'volume': float(pe.get('totalTradedVolume', 0)),
+                                    'iv': float(pe.get('impliedVolatility', 0)),
+                                    'ltp': float(pe.get('lastPrice', 0))
+                                }
+                                if idx < 2:
+                                    logger.debug(f"  ✅ PE Strike {strike}: {puts[str(strike)]}")
+                            except Exception as e:
+                                logger.warning(f"  ⚠️ Error parsing PE at strike {strike}: {e}")
                 
-                # Process put options - try multiple field name variations
-                if 'PE' in option and option['PE']:
-                    pe_data = option['PE']
-                    puts[str(strike)] = {
-                        'bid': float(pe_data.get('bidprice') or pe_data.get('bid') or 0),
-                        'ask': float(pe_data.get('askPrice') or pe_data.get('ask') or 0),
-                        'oi': float(pe_data.get('openInterest') or pe_data.get('oi') or 0),
-                        'volume': float(pe_data.get('totalTradedVolume') or pe_data.get('volume') or 0),
-                        'iv': float(pe_data.get('impliedVolatility') or pe_data.get('iv') or 0)
-                    }
+                logger.info(f"✅ Parsed {len(calls)} calls and {len(puts)} puts for {ticker}")
+                return calls, puts, expiries
+            
+            else:
+                logger.warning(f"⚠️ Unexpected data type from NSEPython: {type(data)}")
+                return {}, {}, []
         
-        if calls or puts:
-            logging.info(f"✅ Successfully fetched options for {ticker}: {len(calls)} calls, {len(puts)} puts, {len(expiries)} expiries")
-        else:
-            logging.warning(f"⚠️ No options data returned for {ticker}")
-        
-        return calls, puts, expiries
+        except ImportError:
+            logger.warning(f"⚠️ NSEPython not installed. Install with: pip install nsepython")
+            logger.info(f"📝 Falling back to empty data...")
+            return {}, {}, []
     
-    except requests.exceptions.ConnectionError as e:
-        logging.error(f"🌐 Connection error for {ticker}: {e}")
-        return {}, {}, []
-    except requests.exceptions.Timeout as e:
-        logging.error(f"⏱️ Timeout error for {ticker}: {e}")
-        return {}, {}, []
-    except requests.exceptions.HTTPError as e:
-        logging.error(f"📡 HTTP error for {ticker}: {e}")
-        return {}, {}, []
-    except ValueError as e:
-        logging.error(f"🔴 JSON decode error for {ticker}: {e}")
-        return {}, {}, []
     except Exception as e:
-        logging.error(f"❌ Unexpected error fetching option chain for {ticker}: {type(e).__name__}: {e}")
+        logger.error(f"❌ Error fetching option chain for {ticker}: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
         return {}, {}, []
