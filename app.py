@@ -3,154 +3,175 @@ import sys
 import os
 import pandas as pd
 
-# ✅ FIX: Ensure local modules are found (critical for Streamlit Cloud)
+# ✅ Fix module path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from pipeline import run_pipeline
-from data_fetcher import fetch_ohlcv, fetch_option_chain
+from data_fetcher import fetch_ohlcv
 from config import NIFTY_50
+from nse_fetcher import fetch_nifty_option_chain
 
-# Page config
+# =========================
+# ⚙️ PAGE CONFIG
+# =========================
 st.set_page_config(page_title="Options Trading Engine", layout="wide")
 
-st.title("📈 Options Trading Engine (Open Source Data)")
-st.caption("RL-based signal engine for NIFTY stocks")
+st.title("📈 Options Trading Engine")
+st.caption("Stock Direction + NIFTY Options (PCR & IV) based strategy")
 
-# ===== RAW DATA EXPLORATION SECTION =====
+# =========================
+# 📊 SIDEBAR — DATA EXPLORER
+# =========================
 st.sidebar.markdown("### 📊 Data Explorer")
 
-with st.sidebar.expander("🔍 View Raw Data", expanded=False):
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        selected_ticker = st.selectbox(
-            "Select a ticker:",
-             NIFTY_50  # ✅ FIX: Show ALL 50 NIFTY tickers
-        )
-    
-    with col2:
-        data_type = st.radio("Data Type:", ["📈 Stock Data", "📊 Options Data"])
-    
-    if st.button("📥 Fetch Raw Data", key="fetch_raw"):
+with st.sidebar.expander("🔍 Stock Data", expanded=False):
+    selected_ticker = st.selectbox("Select ticker:", NIFTY_50)
+
+    if st.button("📥 Fetch Stock Data"):
         try:
-            if data_type == "📈 Stock Data":
-                st.subheader(f"📈 {selected_ticker} - OHLCV Data (Last 5 Years)")
-                stock_data = fetch_ohlcv(selected_ticker)
-                
-                # Display last 20 rows
-                st.write(f"**Total Records:** {len(stock_data)}")
-                st.dataframe(stock_data.tail(20), use_container_width=True)
-                
-                # Download button
-                csv_data = stock_data.to_csv()
-                st.download_button(
-                    label="⬇️ Download Stock Data (CSV)",
-                    data=csv_data,
-                    file_name=f"{selected_ticker}_ohlcv_5years.csv",
-                    mime="text/csv",
-                    key="download_stock"
-                )
-                
-                # Statistics
-                with st.expander("📊 Statistics"):
-                    st.write(stock_data.describe())
-            
-            else:
-                st.subheader(f"📊 {selected_ticker} - Options Chain Data")
-                with st.spinner("Fetching options data from NSE..."):
-                    calls, puts, expiries = fetch_option_chain(selected_ticker)
-                
-                if calls or puts:
-                    # Display expiries
-                    if expiries:
-                        st.write(f"**Available Expiries:** {', '.join(expiries[:5])}")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write("**📞 Call Options (Top 5 by Strike)**")
-                        if calls:
-                            calls_df = pd.DataFrame(calls).T.head(5)
-                            st.dataframe(calls_df, use_container_width=True)
-                            
-                            # Download calls
-                            st.download_button(
-                                label="⬇️ Download Call Options",
-                                data=calls_df.to_csv(),
-                                file_name=f"{selected_ticker}_calls.csv",
-                                mime="text/csv",
-                                key="download_calls"
-                            )
-                        else:
-                            st.info("No call options data available")
-                    
-                    with col2:
-                        st.write("**🔻 Put Options (Top 5 by Strike)**")
-                        if puts:
-                            puts_df = pd.DataFrame(puts).T.head(5)
-                            st.dataframe(puts_df, use_container_width=True)
-                            
-                            # Download puts
-                            st.download_button(
-                                label="⬇️ Download Put Options",
-                                data=puts_df.to_csv(),
-                                file_name=f"{selected_ticker}_puts.csv",
-                                mime="text/csv",
-                                key="download_puts"
-                            )
-                        else:
-                            st.info("No put options data available")
-                else:
-                    st.warning("⚠️ No options data available for this ticker. NSE API may be temporarily unavailable.")
-        
+            stock_data = fetch_ohlcv(selected_ticker)
+
+            st.subheader(f"{selected_ticker} OHLCV Data")
+            st.write(f"Records: {len(stock_data)}")
+
+            st.dataframe(stock_data.tail(20), use_container_width=True)
+
+            st.download_button(
+                "⬇️ Download CSV",
+                stock_data.to_csv(),
+                f"{selected_ticker}.csv",
+                "text/csv",
+            )
+
         except Exception as e:
-            st.error(f"❌ Error fetching data: {str(e)}")
-            st.info("💡 Tip: This could be due to network issues or NSE API availability. Please try again.")
+            st.error(f"Error: {e}")
+
+# =========================
+# 📊 SIDEBAR — NIFTY OPTIONS
+# =========================
+st.sidebar.markdown("### 📊 NIFTY Options")
+
+if st.sidebar.button("Fetch NIFTY Options"):
+
+    with st.spinner("Fetching NIFTY option chain..."):
+        try:
+            calls, puts, expiries = fetch_nifty_option_chain()
+
+            if calls is not None and not calls.empty:
+
+                st.subheader("📊 NIFTY Option Chain")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write("📞 Calls (Top 10 by OI)")
+                    top_calls = calls.sort_values("openInterest", ascending=False).head(10)
+                    st.dataframe(top_calls, use_container_width=True)
+
+                with col2:
+                    st.write("🔻 Puts (Top 10 by OI)")
+                    top_puts = puts.sort_values("openInterest", ascending=False).head(10)
+                    st.dataframe(top_puts, use_container_width=True)
+
+                # Metrics
+                total_call_oi = calls["openInterest"].sum()
+                total_put_oi = puts["openInterest"].sum()
+                pcr = total_put_oi / (total_call_oi + 1e-6)
+                avg_iv = calls["impliedVolatility"].mean()
+
+                st.markdown("### 📊 Market Metrics")
+                m1, m2 = st.columns(2)
+                m1.metric("PCR", round(pcr, 2))
+                m2.metric("Avg IV", round(avg_iv, 2))
+
+            else:
+                st.warning("No NIFTY options data available")
+
+        except Exception as e:
+            st.error(f"Error fetching NIFTY data: {e}")
 
 st.markdown("---")
 
-# Run button
-if st.button("Run Strategy"):
-    with st.spinner("Running strategy... this may take 1-2 mins ⏳"):
+# =========================
+# ▶️ RUN STRATEGY
+# =========================
+if st.button("🚀 Run Strategy"):
+    with st.spinner("Running strategy..."):
         try:
             results_df, trades_df = run_pipeline()
 
             st.session_state["results"] = results_df
             st.session_state["trades"] = trades_df
 
-            st.success("✅ Strategy run completed!")
+            st.success("✅ Strategy completed")
 
         except Exception as e:
-            st.error("❌ Error occurred while running pipeline")
+            st.error("❌ Pipeline error")
             st.exception(e)
 
-# Show results
+# =========================
+# 📊 RESULTS
+# =========================
 if "results" in st.session_state:
 
     df = st.session_state["results"]
 
-    st.subheader("📊 All Signals")
-    st.dataframe(df, use_container_width=True)
+    if not df.empty:
 
-    # Top trades
-    st.subheader("🔥 Top Trades")
+        # =========================
+        # 🌍 MARKET CONTEXT
+        # =========================
+        st.subheader("🌍 Market Context (NIFTY Options)")
 
-    top = df[df["Signal"] != "NO TRADE"] \
-        .sort_values(by="Confidence", ascending=False) \
-        .head(5)
+        avg_pcr = df["PCR"].iloc[0]
+        avg_iv = df["IV"].iloc[0]
+        market_bias = df["Market Bias"].iloc[0]
 
-    st.dataframe(top, use_container_width=True)
+        col1, col2, col3 = st.columns(3)
 
-    # Download button
-    st.download_button(
-        label="⬇️ Download Signals CSV",
-        data=df.to_csv(index=False),
-        file_name="signals.csv",
-        mime="text/csv"
-    )
+        col1.metric("PCR", round(avg_pcr, 2))
+        col2.metric("IV", round(avg_iv, 2))
+        col3.metric("Market Bias", market_bias)
 
-# Trade log
+        st.markdown("---")
+
+        # =========================
+        # 📊 SIGNAL TABLE
+        # =========================
+        st.subheader("📊 Trading Signals")
+
+        st.dataframe(df, use_container_width=True)
+
+        # =========================
+        # 🔥 TOP TRADES
+        # =========================
+        st.subheader("🔥 Top Trades")
+
+        top = df[
+            (df["Signal"] != "NO TRADE") &
+            (df["Confidence"] > 0.5)
+        ].sort_values(by="Confidence", ascending=False).head(5)
+
+        st.dataframe(top, use_container_width=True)
+
+        # =========================
+        # ⬇️ DOWNLOAD
+        # =========================
+        st.download_button(
+            "⬇️ Download Signals",
+            df.to_csv(index=False),
+            "signals.csv",
+            "text/csv"
+        )
+
+    else:
+        st.warning("No results generated")
+
+# =========================
+# 📉 TRADE LOG
+# =========================
 if "trades" in st.session_state:
+
     st.subheader("📉 Trade Log")
 
     trades_df = st.session_state["trades"]
@@ -158,7 +179,6 @@ if "trades" in st.session_state:
     if not trades_df.empty:
         st.dataframe(trades_df, use_container_width=True)
 
-        # Simple visualization
         if "Confidence" in trades_df.columns:
             st.subheader("📈 Confidence Trend")
             st.line_chart(trades_df["Confidence"])
