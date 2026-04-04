@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 from config import NIFTY_50
 from data_fetcher import fetch_ohlcv, fetch_option_chain
+from nse_fetcher import fetch_option_chain_nse
 from features import compute_features
 from rl_agent import TradingAgent
 from options_engine import OptionsStrategyEngine
@@ -44,7 +45,8 @@ def run_pipeline():
                     continue
             
             # Fetch options and generate signal
-            calls, puts, expiries = fetch_option_chain(ticker)
+            symbol = ticker.replace(".NS", "")
+            calls, puts, expiries = fetch_option_chain_nse(symbol)
             
             # ✅ FIX: Safe signal generation with error handling
             result = engine.generate_signal(df, agent, calls, puts, ticker)
