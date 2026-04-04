@@ -5,3 +5,4 @@ yfinance
 ta==0.11.0
 requests
 nsepython
+requests
