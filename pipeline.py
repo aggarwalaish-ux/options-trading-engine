@@ -3,7 +3,6 @@ import logging
 from config import NIFTY_50
 from data_fetcher import fetch_ohlcv, fetch_option_chain
 from nse_fetcher import fetch_nifty_option_chain
-from nse_fetcher import fetch_option_chain_nse
 from features import compute_features
 from rl_agent import TradingAgent
 from options_engine import OptionsStrategyEngine
